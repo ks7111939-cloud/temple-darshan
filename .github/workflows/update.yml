@@ -1,4 +1,4 @@
-name: Update YouTube Live M3U (HLS HQ Auto)
+name: Update YouTube Live M3U (Temple 24x7 HQ HLS)
 
 on:
   schedule:
@@ -24,68 +24,68 @@ jobs:
             NAME=$(echo "$row" | jq -r '.name')
             YTID=$(echo "$row" | jq -r '.youtube')
 
-            echo "Processing: $NAME ($YTID)"
+            echo "Processing channel: $NAME ($YTID)"
 
-            # 1️⃣ Extract LIVE video ID
+            # 1️⃣ Extract videoId from /live page (works for 24x7 temple streams)
             VIDEOID=$(curl -s "https://www.youtube.com/@$YTID/live" \
               | tr '\n' ' ' \
-              | grep -o '"videoId":"[A-Za-z0-9_-]*","isLive":true' \
-              | sed 's/"videoId":"//;s/","isLive":true//' \
-              | head -n 1)
+              | grep -o '"videoId":"[^"]*"' \
+              | head -n 1 \
+              | sed 's/"videoId":"//; s/"//')
 
             if [ -z "$VIDEOID" ]; then
-              echo "No LIVE stream for $YTID — skipping."
+              echo "ERROR: Could not extract videoId for $NAME"
               continue
             fi
 
-            echo "Found Live Video: $VIDEOID"
+            echo "Video ID: $VIDEOID"
 
-            # 2️⃣ Get video info containing HLS Playlist URL
-            INFO=$(curl -s "https://www.youtube.com/get_video_info?video_id=$VIDEOID&html5=1")
-
-            HLS_ENC=$(echo "$INFO" | grep -o 'hlsManifestUrl=[^&]*' | sed 's/hlsManifestUrl=//')
+            # 2️⃣ Extract HLS Manifest URL directly from video player JSON
+            HLS_ENC=$(curl -s "https://www.youtube.com/watch?v=$VIDEOID" \
+              | tr '\n' ' ' \
+              | grep -o '"hlsManifestUrl":"[^"]*"' \
+              | head -n 1 \
+              | sed 's/"hlsManifestUrl":"//; s/"//')
 
             if [ -z "$HLS_ENC" ]; then
-              echo "No HLS Manifest for $VIDEOID — skipping."
+              echo "ERROR: No HLS manifest for $NAME"
               continue
             fi
 
-            # 3️⃣ Decode URL
+            # URL decode
             HLS_URL=$(printf '%b' "${HLS_ENC//%/\\x}")
 
-            echo "HLS Manifest: $HLS_URL"
+            echo "HLS Manifest URL: $HLS_URL"
 
-            # 4️⃣ Download master playlist (list of qualities)
+            # 3️⃣ Download HLS master playlist
             MASTER=$(curl -s "$HLS_URL")
 
-            # 5️⃣ Extract stream qualities (RESOLUTION=…)
-            # Pick highest available quality automatically
+            # 4️⃣ Pick BEST quality variant playlist
             BEST_STREAM=$(echo "$MASTER" \
               | grep -A1 "#EXT-X-STREAM-INF" \
-              | awk '/RESOLUTION/ {print RES=$0} /index.m3u8/ {print URL=$0}' \
+              | awk '/RESOLUTION/ {RES=$0} /index.m3u8/ {print RES "\t" $0}' \
+              | sed 's/.*RESOLUTION=\([0-9]*\)x\([0-9]*\).*/\1 \2/' \
               | paste - - \
-              | sed 's/RESOLUTION=//;s/x/ /;s/,.*//;s/ /\t/2' \
               | sort -k1,1nr -k2,2nr \
-              | head -n1 \
+              | head -n 1 \
               | awk '{print $NF}')
 
             if [ -z "$BEST_STREAM" ]; then
-              echo "Could not determine best quality for $NAME"
+              echo "ERROR: No quality streams found for $NAME"
               continue
             fi
 
             # Resolve relative URLs
             case "$BEST_STREAM" in
-              http*) BEST_URL="$BEST_STREAM" ;;
-              *) BEST_URL="$(dirname "$HLS_URL")/$BEST_STREAM" ;;
+              http*) FINAL_URL="$BEST_STREAM" ;;
+              *) FINAL_URL="$(dirname "$HLS_URL")/$BEST_STREAM" ;;
             esac
 
-            echo "Selected Best Quality Stream: $BEST_URL"
+            echo "Selected Best Quality Stream: $FINAL_URL"
 
-            # 6️⃣ Append to playlist
+            # 5️⃣ Add to playlist
             echo "#EXTINF:-1,$NAME" >> yt.m3u
-            echo "$BEST_URL" >> yt.m3u
-
+            echo "$FINAL_URL" >> yt.m3u
           done
 
       - name: Commit Playlist
@@ -93,5 +93,5 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add yt.m3u
-          git commit -m "Auto-update HLS HQ Playlist" || echo "No changes"
+          git commit -m "Auto-update Temple HLS Playlist" || echo "No changes"
           git push
