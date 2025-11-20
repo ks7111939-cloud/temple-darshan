@@ -1,53 +1,22 @@
-name: Update YouTube Live M3U
+name: Test JSON
 
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y jq curl
-
-      - name: Generate M3U
+      - name: Debug folders
         run: |
-          echo "#EXTM3U" > yt.m3u
-
-          for row in $(jq -c '.channels[]' channels/temples.json); do
-            NAME=$(echo "$row" | jq -r '.name')
-            YTID=$(echo "$row" | jq -r '.youtube')
-
-            LIVE=$(curl -s "https://www.youtube.com/@$YTID/live" | grep -o "watch?v=[A-Za-z0-9_-]*" | head -n 1)
-
-            if [ -z "$LIVE" ]; then
-              URL="https://www.youtube.com/@$YTID/live"
-            else
-              URL="https://www.youtube.com/$LIVE"
-            fi
-
-            echo "#EXTINF:-1,$NAME" >> yt.m3u
-            echo "$URL" >> yt.m3u
-          done
-
-      - name: Commit updated M3U
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add yt.m3u
-          git commit -m "Auto-update M3U" || echo "No changes to commit"
-          git push
-
-
-      - name: DEBUG FILE STRUCTURE
-        run: |
-          echo "Listing project files:"
+          echo "ROOT:"
           ls -R .
 
-
+      - name: Test jq parsing
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          cat channels/temples.json
+          jq . channels/temples.json
