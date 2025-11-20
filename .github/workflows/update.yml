@@ -20,11 +20,14 @@ jobs:
         run: |
           echo "#EXTM3U" > yt.m3u
 
+          # Read each channel safely (JSON-safe loop)
           jq -c '.channels[]' channels/temples.json | while read -r row; do
             NAME=$(echo "$row" | jq -r '.name')
             YTID=$(echo "$row" | jq -r '.youtube')
 
-          
+            echo "Processing: $NAME ($YTID)"
+
+            # Extract REAL live video ID using isLive:true method
             LIVE=$(curl -s "https://www.youtube.com/@$YTID/live" \
               | tr '\n' ' ' \
               | grep -o '"videoId":"[A-Za-z0-9_-]*","isLive":true' \
@@ -32,9 +35,10 @@ jobs:
               | head -n 1)
 
             if [ -z "$LIVE" ]; then
+              echo "No LIVE match found for $YTID - using fallback"
               URL="https://www.youtube.com/@$YTID/live"
             else
-              URL="https://www.youtube.com/$LIVE"
+              URL="https://www.youtube.com/watch?v=$LIVE"
             fi
 
             echo "#EXTINF:-1,$NAME" >> yt.m3u
