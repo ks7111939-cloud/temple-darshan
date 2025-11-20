@@ -1,4 +1,4 @@
-name: Update YouTube Live DASH M3U
+name: Update YouTube Live M3U (Highest MP4)
 
 on:
   schedule:
@@ -16,17 +16,19 @@ jobs:
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y jq curl
 
-      - name: Generate DASH Playlist
+      - name: Generate MP4 Playlist
         run: |
+          set -euo pipefail
           echo "#EXTM3U" > yt.m3u
 
+          # iterate channels safely
           jq -c '.channels[]' channels/temples.json | while read -r row; do
             NAME=$(echo "$row" | jq -r '.name')
             YTID=$(echo "$row" | jq -r '.youtube')
 
             echo "Processing: $NAME ($YTID)"
 
-            # Extract raw videoId
+            # 1) get a video id from the /live channel page (works for 24x7)
             VIDEOID=$(curl -s "https://www.youtube.com/@$YTID/live" \
               | tr '\n' ' ' \
               | grep -o '"videoId":"[^"]*"' \
@@ -34,38 +36,82 @@ jobs:
               | sed 's/"videoId":"//; s/"//')
 
             if [ -z "$VIDEOID" ]; then
-              echo "No VideoID for $NAME"
+              echo "WARN: Could not extract videoId for $NAME"
+              continue
+            fi
+            echo "VideoID: $VIDEOID"
+
+            # 2) request get_video_info (contains player_response url-encoded)
+            INFO=$(curl -s "https://www.youtube.com/get_video_info?video_id=${VIDEOID}&html5=1&el=detailpage")
+
+            # 3) extract player_response param (URL encoded JSON)
+            PLAYER_ENC=$(echo "$INFO" | sed -n 's/.*player_response=\([^&]*\).*/\1/p' || true)
+
+            if [ -z "$PLAYER_ENC" ]; then
+              echo "WARN: player_response not found via get_video_info for $VIDEOID; falling back to watch page"
+              # fallback: try to extract player JSON from watch page
+              PLAYER_JSON=$(curl -s "https://www.youtube.com/watch?v=${VIDEOID}" \
+                | tr '\n' ' ' \
+                | sed -n 's/.*ytInitialPlayerResponse = \({.*}\);.*$/\1/p')
+            else
+              # url-decode player_response
+              PLAYER_JSON=$(printf '%b' "${PLAYER_ENC//%/\\x}")
+            fi
+
+            if [ -z "$PLAYER_JSON" ]; then
+              echo "ERROR: Could not obtain player JSON for $NAME ($VIDEOID)"
               continue
             fi
 
-            echo "Video ID: $VIDEOID"
+            # 4) try to find progressive MP4 formats (formats + adaptiveFormats)
+            # Combine formats arrays into one stream list
+            # Then select entries where mimeType contains "video/mp4" and has a 'url' field
+            CANDIDATES=$(echo "$PLAYER_JSON" \
+              | jq -c '[ (.streamingData.formats // []) + (.streamingData.adaptiveFormats // []) ] | .[0][]? | select((.mimeType // "") | test("video/mp4")) | {url: (.url // null), cipher: (.signatureCipher // null), width: (.width // 0), height: (.height // 0), bitrate: (.bitrate // 0)}' )
 
-            # Extract DASH Manifest
-            DASH_ENC=$(curl -s "https://www.youtube.com/watch?v=$VIDEOID" \
-              | tr '\n' ' ' \
-              | grep -o '"dashManifestUrl":"[^"]*"' \
-              | head -n 1 \
-              | sed 's/"dashManifestUrl":"//; s/"//')
-
-            if [ -z "$DASH_ENC" ]; then
-              echo "No DASH URL for $NAME"
+            if [ -z "$CANDIDATES" ]; then
+              echo "WARN: No mp4 candidate entries found in player JSON for $NAME"
               continue
             fi
 
-            # Decode URL
-            DASH_URL=$(printf '%b' "${DASH_ENC//%/\\x}")
+            # 5) prefer direct url entries, sort by resolution/bitrate and pick best
+            BEST_URL=""
+            # iterate candidates, pick the one with a direct url and highest resolution
+            echo "$CANDIDATES" | jq -s -c 'sort_by((.width // 0), (.height // 0), (.bitrate // 0)) | reverse | .[]' | while read -r cand; do
+              URL=$(echo "$cand" | jq -r '.url // empty')
+              CIPHER=$(echo "$cand" | jq -r '.cipher // empty')
+              if [ -n "$URL" ]; then
+                BEST_URL="$URL"
+                break
+              fi
+              # if we hit a signatureCipher, attempt naive extraction (many times direct url exists in cipher)
+              if [ -n "$CIPHER" ]; then
+                # cipher format: url=...&s=... or url=...&sig=...
+                # try to extract url= field and decode it
+                UC=$(echo "$CIPHER" | sed -n 's/.*url=\([^&]*\).*/\1/p' || true)
+                if [ -n "$UC" ]; then
+                  UC_DEC=$(printf '%b' "${UC//%/\\x}")
+                  BEST_URL="$UC_DEC"
+                  break
+                fi
+              fi
+            done
 
-            echo "DASH URL: $DASH_URL"
+            if [ -z "$BEST_URL" ]; then
+              echo "WARN: No direct playable MP4 URL could be resolved for $NAME"
+              continue
+            fi
 
-            # Add to Playlist
+            # 6) Append to M3U
             echo "#EXTINF:-1,$NAME" >> yt.m3u
-            echo "$DASH_URL" >> yt.m3u
+            echo "$BEST_URL" >> yt.m3u
+            echo "Added: $NAME -> $BEST_URL"
           done
 
-      - name: Commit DASH Playlist
+      - name: Commit MP4 Playlist
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add yt.m3u
-          git commit -m "Auto-update Temple DASH Playlist" || echo "No changes"
+          git commit -m "Auto-update MP4 Playlist" || echo "No changes to commit"
           git push
