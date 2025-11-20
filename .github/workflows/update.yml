@@ -22,6 +22,17 @@ jobs:
           echo "ROOT:"
           ls -R .
 
+      - name: DEBUG FILE STRUCTURE
+        run: |
+          echo "CURRENT DIRECTORY:"
+          pwd
+          echo "FILES IN ROOT:"
+          ls -al .
+          echo "FILES IN CHANNELS FOLDER:"
+          ls -al channels || echo "channels folder NOT FOUND"
+          echo "CONTENT OF temples.json:"
+          cat channels/temples.json || echo "temples.json NOT FOUND"
+
       - name: Generate M3U
         run: |
           echo "#EXTM3U" > yt.m3u
