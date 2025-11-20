@@ -24,7 +24,12 @@ jobs:
             NAME=$(echo "$row" | jq -r '.name')
             YTID=$(echo "$row" | jq -r '.youtube')
 
-            LIVE=$(curl -s "https://www.youtube.com/@$YTID/live" | grep -o "watch?v=[A-Za-z0-9_-]*" | head -n 1)
+          
+            LIVE=$(curl -s "https://www.youtube.com/@$YTID/live" \
+              | tr '\n' ' ' \
+              | grep -o '"videoId":"[A-Za-z0-9_-]*","isLive":true' \
+              | sed 's/"videoId":"//;s/","isLive":true//' \
+              | head -n 1)
 
             if [ -z "$LIVE" ]; then
               URL="https://www.youtube.com/@$YTID/live"
