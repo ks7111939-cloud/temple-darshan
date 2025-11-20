@@ -43,3 +43,11 @@ jobs:
           git add yt.m3u
           git commit -m "Auto-update M3U" || echo "No changes to commit"
           git push
+
+
+      - name: DEBUG FILE STRUCTURE
+        run: |
+          echo "Listing project files:"
+          ls -R .
+
+
